@@ -1,3 +1,7 @@
+# Fork
+This is a fork of https://github.com/nickw444/appdaemon-testing. Currently just trying to release a straight copy.
+
+
 # appdaemon-testing
 Ergonomic and pythonic unit testing for AppDaemon apps. Utilities to allow you to test your AppDaemon home automation apps using all the _pythonic_ testing patterns you are already familiar with.
 
