@@ -1,4 +1,5 @@
 import contextlib
+import datetime
 import logging
 import unittest.mock as mock
 from collections import defaultdict
@@ -48,10 +49,13 @@ class HassDriver:
         )
 
         self._setup_active = False
-        self._states: Dict[str, Dict[str, Any]] = defaultdict(lambda: {"state": None})
+        self._states: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(lambda: {"state": {"value": None}})
         self._state_spys: Dict[Union[str, None], List[StateSpy]] = defaultdict(
             lambda: []
         )
+
+    def set_mock(self, meth: str):
+        self._mocks[meth] = mock.Mock()
 
     def get_mock(self, meth: str) -> mock.Mock:
         """
@@ -69,7 +73,7 @@ class HassDriver:
         """
         for meth_name, impl in self._mocks.items():
             if getattr(hass.Hass, meth_name) is None:
-                raise AssertionError("Attempt to mock non existing method: ", meth_name)
+                _LOGGER.warning(f"Mocking a non-standard HassDriver method:, {meth_name}")
             _LOGGER.debug("Patching hass.Hass.%s", meth_name)
             setattr(hass.Hass, meth_name, impl)
 
@@ -121,17 +125,24 @@ class HassDriver:
             # Avoid triggering state changes during state setup phase
             trigger = not self._setup_active
 
+        now = datetime.datetime.now()
+
         domain, _ = entity.split(".")
         state_entry = self._states[entity]
         prev_state = copy(state_entry)
-        old_value = previous or prev_state.get(attribute_name)
+        old_value = previous or prev_state.get(attribute_name).get('value')
+        old_dt = prev_state.get(attribute_name, {}).get('datetime', now)
         new_value = state
+        new_dt = now
 
         if old_value == new_value:
             return
 
         # Update the state entry
-        state_entry[attribute_name] = new_value
+        state_entry[attribute_name] = {
+            'value': new_value,
+            'datetime': new_dt,
+        }
 
         if not trigger:
             return
@@ -146,20 +157,25 @@ class HassDriver:
             param_new = copy(state_entry) if spy.attribute == "all" else new_value
             param_attribute = None if spy.attribute == "all" else attribute_name
 
-            if all([sat_old, sat_new, sat_attr]):
+            sat_dur = True
+            duration = spy.kwargs.get('duration')
+            if duration:
+                sat_dur = (new_dt - old_dt).total_seconds() > duration
+
+            if all([sat_old, sat_new, sat_attr, sat_dur]):
                 spy.callback(entity, param_attribute, param_old, param_new, spy.kwargs)
 
     def _se_get_state(self, entity_id=None, attribute="state", default=None, **kwargs):
         _LOGGER.debug("Getting state for entity: %s", entity_id)
 
-        fully_qualified = "." in entity_id
+        fully_qualified = entity_id and "." in entity_id
         matched_states = {}
         if fully_qualified:
             matched_states[entity_id] = self._states[entity_id]
         else:
             for s_eid, state in self._states.items():
                 domain, entity = s_eid.split(".")
-                if domain == entity_id:
+                if domain == entity_id or not entity_id:
                     matched_states[s_eid] = state
 
         # With matched states, map the provided attribute (if applicable)
